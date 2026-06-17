@@ -68,7 +68,7 @@ Output format — always respond with JSON:
     id: 'threatIntel',
     name: 'Threat Intelligence Agent',
     shortName: 'Threat Intel',
-    color: '#8b5cf6',
+    color: '#6366f1',
     icon: '🕵️',
     role: 'THREAT_INTEL',
     systemPrompt: `You are the Threat Intelligence Agent in CyberGuard AI, a multi-agent SOC platform.
@@ -98,7 +98,7 @@ Output format — always respond with JSON:
     id: 'rootCause',
     name: 'Root Cause Analysis Agent',
     shortName: 'Root Cause',
-    color: '#f97316',
+    color: '#d97706',
     icon: '🔬',
     role: 'ROOT_CAUSE',
     systemPrompt: `You are the Root Cause Analysis Agent in CyberGuard AI, a multi-agent SOC platform.
@@ -130,7 +130,7 @@ Output format — always respond with JSON:
     id: 'riskAssessment',
     name: 'Risk Assessment Agent',
     shortName: 'Risk',
-    color: '#ef4444',
+    color: '#dc2626',
     icon: '⚠️',
     role: 'RISK',
     systemPrompt: `You are the Risk Assessment Agent in CyberGuard AI, a multi-agent SOC platform.
@@ -163,7 +163,7 @@ Output format — always respond with JSON:
     id: 'remediation',
     name: 'Remediation Agent',
     shortName: 'Remediation',
-    color: '#10b981',
+    color: '#16a34a',
     icon: '🛡️',
     role: 'REMEDIATION',
     systemPrompt: `You are the Remediation Agent in CyberGuard AI, a multi-agent SOC platform.
@@ -195,7 +195,7 @@ Output format — always respond with JSON:
     id: 'executive',
     name: 'Executive Report Agent',
     shortName: 'Exec Report',
-    color: '#06b6d4',
+    color: '#2563eb',
     icon: '📊',
     role: 'EXECUTIVE',
     systemPrompt: `You are the Executive Report Agent in CyberGuard AI, a multi-agent SOC platform.

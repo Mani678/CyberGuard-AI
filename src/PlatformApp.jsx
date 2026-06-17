@@ -5,7 +5,7 @@ import ExecutiveReport from './components/ExecutiveReport.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
 import { AGENTS, callAgent, parseAgentResponse } from './lib/agents.js'
 import { INCIDENT_TEMPLATES } from './lib/sampleData.js'
-import { getBandApiKey, createBandRoom, postAgentMessage, handoffContext } from './lib/band.js'
+import { createInvestigationRoom, addAllParticipants, postAgentFinding, getAgentContext } from './lib/band.js'
 
 const AGENT_ORDER = ['triage', 'threatIntel', 'rootCause', 'riskAssessment', 'remediation', 'executive']
 
@@ -54,18 +54,24 @@ export default function PlatformApp({ onBack }) {
 
     setIncident(incidentMeta)
 
-    // Try to create a Band room
+    // Band room creation is MANDATORY — Band is the real coordination
+    // layer for this app, not an optional add-on. Triage creates the
+    // room, then all 5 other agents are added as participants so they
+    // can see @mentions directed at them.
     let roomId = null
     try {
-      const bandKey = getBandApiKey()
-      if (bandKey) {
-        const room = await createBandRoom(incidentMeta.id, incidentMeta.title)
-        roomId = room.id || room.room_id
-        setBandRoomId(roomId)
-        addMessage(AGENTS.triage, `Band room created: ${roomId}. All agents joining investigation channel.`, 'system')
-      }
+      addMessage(AGENTS.triage, 'Creating Band investigation room...', 'system')
+      const room = await createInvestigationRoom(incidentMeta.title)
+      roomId = room.roomId
+      setBandRoomId(roomId)
+
+      await addAllParticipants(roomId)
+      addMessage(AGENTS.triage, `Band room ${roomId.slice(0, 8)} created. All 6 agents joined as participants.`, 'system')
     } catch (e) {
-      // Band not connected, continue with local mode
+      addMessage(AGENTS.triage, `Band room setup failed: ${e.message}`, 'error')
+      setError(`Band setup failed: ${e.message}. Check your Band API keys are configured in Vercel environment variables.`)
+      setIsRunning(false)
+      return
     }
 
     let previousContext = logsText
@@ -78,10 +84,26 @@ export default function PlatformApp({ onBack }) {
       addMessage(agent, '', 'thinking')
 
       try {
-        // Build prompt with context from previous agents
-        const agentPrompt = agentId === 'triage'
-          ? `Analyze these security logs and alerts:\n\n${previousContext}`
-          : `Here are the findings from previous agents:\n\n${previousContext}\n\nNow perform your ${agent.role} analysis.`
+        let agentPrompt
+
+        if (agentId === 'triage') {
+          // First agent — no Band context yet, just the raw logs
+          agentPrompt = `Analyze these security logs and alerts:\n\n${logsText}`
+        } else {
+          // Every subsequent agent's prompt is built from what's actually
+          // in the Band room — this is the real handoff mechanism. We
+          // fetch this agent's Band context (messages that @mentioned it)
+          // rather than passing a local JS variable between loop iterations.
+          const context = await getAgentContext(roomId, agentId)
+          const mentionedContent = (context.messages || [])
+            .filter(m => m.message_type === 'text')
+            .map(m => m.content)
+            .join('\n\n')
+
+          agentPrompt = mentionedContent
+            ? `You were mentioned in the Band investigation room with this handoff:\n\n${mentionedContent}\n\nNow perform your ${agent.role} analysis.`
+            : `Here are the findings from previous agents:\n\n${previousContext}\n\nNow perform your ${agent.role} analysis.`
+        }
 
         const response = await callAgent(agent, agentPrompt, [], agentId === 'executive' ? 1100 : undefined)
         const parsed = parseAgentResponse(response)
@@ -110,33 +132,37 @@ export default function PlatformApp({ onBack }) {
 
         addMessage(agent, summary || parsed.summary || response.slice(0, 500), 'complete')
 
-        // Post handoff message
+        // Post this agent's finding TO BAND, @mentioning the next agent.
+        // This IS the handoff — Band routes it, the next agent's context
+        // fetch above is what picks it up. Not a courtesy log afterward.
         const nextAgentId = AGENT_ORDER[AGENT_ORDER.indexOf(agentId) + 1]
-        if (nextAgentId && parsed.handoff_to) {
-          addMessage(agent, parsed.handoff_context || `Passing findings to ${AGENTS[nextAgentId]?.name}`, 'handoff', {
+        if (nextAgentId) {
+          const handoffText = parsed.handoff_context || summary || `Findings ready for ${AGENTS[nextAgentId]?.name}`
+          addMessage(agent, handoffText, 'handoff', {
             handoffTo: AGENTS[nextAgentId]?.name,
             nextAgent: AGENTS[nextAgentId]?.name,
             nextAgentId
           })
 
-          // Post to Band if connected
-          if (roomId) {
-            try {
-              await postAgentMessage(roomId, agent.name, summary)
-              await handoffContext(roomId, agent.name, AGENTS[nextAgentId].name, parsed)
-            } catch (e) { /* Band post failed, continue */ }
-          }
+          await postAgentFinding(roomId, agentId, handoffText, nextAgentId)
         }
 
-        // Store findings and update context
+        // Store findings for the dashboard/report UI
         findingsRef.current[agentId] = parsed
         setFindings({ ...findingsRef.current })
 
-        // Build context for next agent — summarize all findings so far
-        previousContext = AGENT_ORDER
-          .slice(0, AGENT_ORDER.indexOf(agentId) + 1)
-          .map(id => findingsRef.current[id] ? `=== ${AGENTS[id].name} Findings ===\n${JSON.stringify(findingsRef.current[id], null, 2)}` : '')
-          .join('\n\n')
+        // Fallback context chain (used only if a Band context fetch ever
+        // comes back empty — keeps the demo resilient to a flaky Band call)
+        if (agentId === 'remediation') {
+          previousContext = AGENT_ORDER
+            .slice(0, AGENT_ORDER.indexOf(agentId) + 1)
+            .map(id => findingsRef.current[id]?.summary ? `${AGENTS[id].name}: ${findingsRef.current[id].summary}` : '')
+            .filter(Boolean)
+            .join('\n')
+          previousContext += `\n\nRemediation plan: ${parsed.handoff_context || parsed.summary || ''}`
+        } else {
+          previousContext = parsed.handoff_context || parsed.summary || JSON.stringify(parsed).slice(0, 800)
+        }
 
         setAgentStatus(agentId, 'complete')
 
@@ -179,7 +205,7 @@ export default function PlatformApp({ onBack }) {
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg0)' }}>
       {/* Top bar */}
-      <div style={{
+      <div className="top-bar" style={{
         height: 56, display: 'flex', alignItems: 'center', padding: '0 20px',
         borderBottom: '1px solid var(--border)', background: 'var(--bg1)',
         gap: 16, flexShrink: 0
@@ -189,17 +215,18 @@ export default function PlatformApp({ onBack }) {
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{
-            width: 28, height: 28, borderRadius: 6,
-            background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
-          }}>🛡️</div>
-          <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '-0.02em' }}>
-            CyberGuard <span style={{ color: 'var(--accent)' }}>AI</span>
+            width: 24, height: 24, borderRadius: 5,
+            background: 'var(--accent)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11,
+            fontWeight: 700, color: '#fff', fontFamily: 'var(--mono)'
+          }}>CG</div>
+          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.01em' }}>
+            CyberGuard <span style={{ color: 'var(--text2)' }}>AI</span>
           </span>
         </div>
 
         {/* Agent status dots */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 8 }}>
+        <div className="top-bar-status-dots" style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 8 }}>
           {AGENT_ORDER.map(id => (
             <div key={id} title={AGENTS[id].name} style={{
               display: 'flex', alignItems: 'center', gap: 4,
@@ -222,24 +249,24 @@ export default function PlatformApp({ onBack }) {
           {bandRoomId && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              fontSize: 11, color: 'var(--purple)', fontFamily: 'var(--mono)',
-              background: 'var(--purple-dim)', padding: '4px 10px', borderRadius: 8,
-              border: '1px solid rgba(139,92,246,0.3)'
+              fontSize: 11, color: 'var(--accent2)', fontFamily: 'var(--mono)',
+              background: 'var(--accent-dim)', padding: '4px 10px', borderRadius: 5,
+              border: '1px solid rgba(37,99,235,0.25)'
             }}>
-              🔗 Band: {bandRoomId.slice(0, 8)}...
+              Band: {bandRoomId.slice(0, 8)}
             </div>
           )}
           <button className="btn-ghost" onClick={() => setShowSettings(true)} style={{ fontSize: 12, padding: '6px 12px' }}>
-            ⚙️ Settings
+            Settings
           </button>
         </div>
       </div>
 
       {/* Main layout */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '320px 1fr 340px', overflow: 'hidden' }}>
+      <div className="platform-grid" style={{ flex: 1, display: 'grid', gridTemplateColumns: '320px 1fr 340px', overflow: 'hidden' }}>
 
         {/* LEFT — Input panel */}
-        <div style={{
+        <div className="platform-left" style={{
           borderRight: '1px solid var(--border)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
           background: 'var(--bg1)'
@@ -314,12 +341,12 @@ export default function PlatformApp({ onBack }) {
         </div>
 
         {/* CENTER — Agent collaboration panel */}
-        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div className="platform-center" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <AgentPanel messages={messages} activeAgents={agentStatuses} bandRoomId={bandRoomId} />
         </div>
 
         {/* RIGHT — Dashboard / Report */}
-        <div style={{
+        <div className="platform-right" style={{
           borderLeft: '1px solid var(--border)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
           background: 'var(--bg1)'
