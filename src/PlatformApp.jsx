@@ -95,9 +95,15 @@ export default function PlatformApp({ onBack }) {
           // fetch this agent's Band context (messages that @mentioned it)
           // rather than passing a local JS variable between loop iterations.
           const context = await getAgentContext(roomId, agentId)
+          const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
           const mentionedContent = (context.messages || [])
             .map(m => m.content || m.message?.content || m.text || '')
             .filter(Boolean)
+            // Band echoes @mention UUIDs inline in message content. Left
+            // in, Claude reads them as a "record ID" it must go fetch,
+            // and incorrectly reports the handoff as missing/unavailable.
+            // Strip them — the handle/text context is what matters here.
+            .map(text => text.replace(UUID_RE, '').replace(/@\S+\s*/g, '').trim())
             .join('\n\n')
 
           if (!mentionedContent) {
@@ -109,7 +115,7 @@ export default function PlatformApp({ onBack }) {
             : `Here are the findings from previous agents:\n\n${previousContext}\n\nNow perform your ${agent.role} analysis.`
         }
 
-        const response = await callAgent(agent, agentPrompt, [], agentId === 'executive' ? 1100 : (agentId === 'triage' ? 900 : undefined))
+        const response = await callAgent(agent, agentPrompt, [], agentId === 'executive' ? 1100 : (agentId === 'triage' ? 1100 : undefined))
         const parsed = parseAgentResponse(response)
 
         // Remove thinking bubble, add real response

@@ -54,7 +54,8 @@ Your job:
 6. Hand off findings to the Threat Intelligence Agent
 
 Output format — always respond with JSON. Put short critical fields FIRST,
-the verbose alerts array LAST, since truncation risk is highest at the end:
+the verbose alerts array LAST, since truncation risk is highest at the end.
+List AT MOST the 5 most important alerts in the array, even if more exist:
 {
   "priority_count": {"critical":0,"high":0,"medium":0,"low":0},
   "top_threat": "most urgent finding",
