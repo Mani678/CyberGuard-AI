@@ -106,7 +106,10 @@ export default async function handler(req, res) {
       const result = await bandFetch(`/chats/${roomId}/context?limit=50`, apiKey, {
         method: 'GET'
       })
-      return res.status(200).json({ messages: result.data || [] })
+      // Pass through the ENTIRE raw response, not just an assumed .data
+      // field — this lets the frontend see Band's actual shape rather
+      // than us guessing a field name and silently getting an empty array.
+      return res.status(200).json({ raw: result, messages: result.data || result.items || result.messages || (Array.isArray(result) ? result : []) })
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` })

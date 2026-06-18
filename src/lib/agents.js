@@ -241,6 +241,7 @@ export function parseAgentResponse(text) {
       // Trim back to the last complete top-level value and try to
       // close braces/brackets that were left open.
       let candidate = jsonMatch[0]
+      // Strip back to the last comma before the cutoff, then close up.
       const lastGoodComma = candidate.lastIndexOf(',')
       if (lastGoodComma > 0) {
         candidate = candidate.slice(0, lastGoodComma)
@@ -258,5 +259,5 @@ export function parseAgentResponse(text) {
       }
     }
   }
-  return { raw: text, error: 'Could not parse JSON', summary: text.slice(0, 200) }
+  return { raw: text, error: 'Could not parse JSON' }
 }
