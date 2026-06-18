@@ -226,13 +226,37 @@ Output format — always respond with JSON:
   }
 }
 
-// Parse agent JSON response safely
+// Parse agent JSON response safely. Haiku sometimes truncates at the
+// token limit mid-array, or adds stray text before/after the JSON block.
+// This tries a few recovery strategies before giving up.
 export function parseAgentResponse(text) {
-  try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (jsonMatch) return JSON.parse(jsonMatch[0])
-    return { raw: text, error: 'Could not parse JSON' }
-  } catch (e) {
-    return { raw: text, error: e.message }
+  // Attempt 1: straightforward greedy match
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0])
+    } catch (e) {
+      // Attempt 2: response was likely truncated mid-array/object.
+      // Trim back to the last complete top-level value and try to
+      // close braces/brackets that were left open.
+      let candidate = jsonMatch[0]
+      // Strip back to the last comma before the cutoff, then close up.
+      const lastGoodComma = candidate.lastIndexOf(',')
+      if (lastGoodComma > 0) {
+        candidate = candidate.slice(0, lastGoodComma)
+        const openBraces = (candidate.match(/\{/g) || []).length
+        const closeBraces = (candidate.match(/\}/g) || []).length
+        const openBrackets = (candidate.match(/\[/g) || []).length
+        const closeBrackets = (candidate.match(/\]/g) || []).length
+        candidate += ']'.repeat(Math.max(0, openBrackets - closeBrackets))
+        candidate += '}'.repeat(Math.max(0, openBraces - closeBraces))
+        try {
+          return JSON.parse(candidate)
+        } catch (e2) {
+          // fall through to error return below
+        }
+      }
+    }
   }
+  return { raw: text, error: 'Could not parse JSON', summary: text.slice(0, 200) }
 }

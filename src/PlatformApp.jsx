@@ -95,9 +95,10 @@ export default function PlatformApp({ onBack }) {
           // fetch this agent's Band context (messages that @mentioned it)
           // rather than passing a local JS variable between loop iterations.
           const context = await getAgentContext(roomId, agentId)
+          console.log(`[DEBUG] Band context for ${agentId}:`, JSON.stringify(context, null, 2))
           const mentionedContent = (context.messages || [])
-            .filter(m => m.message_type === 'text')
-            .map(m => m.content)
+            .map(m => m.content || m.message?.content || '')
+            .filter(Boolean)
             .join('\n\n')
 
           agentPrompt = mentionedContent
@@ -105,8 +106,10 @@ export default function PlatformApp({ onBack }) {
             : `Here are the findings from previous agents:\n\n${previousContext}\n\nNow perform your ${agent.role} analysis.`
         }
 
-        const response = await callAgent(agent, agentPrompt, [], agentId === 'executive' ? 1100 : undefined)
+        const response = await callAgent(agent, agentPrompt, [], agentId === 'executive' ? 1100 : (agentId === 'triage' ? 900 : undefined))
+        console.log(`[DEBUG] Raw Claude response for ${agentId}:`, response)
         const parsed = parseAgentResponse(response)
+        console.log(`[DEBUG] Parsed result for ${agentId}:`, parsed)
 
         // Remove thinking bubble, add real response
         setMessages(prev => prev.filter(m => !(m.agent.id === agentId && m.type === 'thinking')))
